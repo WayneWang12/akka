@@ -19,6 +19,8 @@ import akka.japi.pf.ReceiveBuilder;
 
 import org.scalatest.junit.JUnitSuite;
 
+abfdsaljflk
+
 public class ActorCreationTest extends JUnitSuite {
 
   static class C implements Creator<AbstractActor> {
