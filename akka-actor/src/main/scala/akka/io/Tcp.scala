@@ -21,6 +21,7 @@ import java.lang.{ Iterable ⇒ JIterable }
 import java.nio.file.Path
 
 import akka.annotation.InternalApi
+import io.netty.buffer.{ ByteBuf, Unpooled }
 
 /**
  * TCP Extension for Akka’s IO layer.
@@ -304,7 +305,7 @@ object Tcp extends ExtensionId[TcpExt] with ExtensionIdProvider {
 
     /**
      * An acknowledgment is only sent if this write command “wants an ack”, which is
-     * equivalent to the [[#ack]] token not being a of type [[NoAck]].
+     * equivalent to the [[ack]] token not being a of type [[NoAck]].
      */
     def wantsAck: Boolean = !ack.isInstanceOf[NoAck]
 
@@ -324,7 +325,7 @@ object Tcp extends ExtensionId[TcpExt] with ExtensionIdProvider {
    * or have been sent!</b> Unfortunately there is no way to determine whether
    * a particular write has been sent by the O/S.
    */
-  final case class Write(data: ByteString, ack: Event) extends SimpleWriteCommand
+  final case class Write(data: ByteBuf, ack: Event) extends SimpleWriteCommand
   object Write {
     /**
      * The empty Write doesn't write anything and isn't acknowledged.
@@ -332,13 +333,13 @@ object Tcp extends ExtensionId[TcpExt] with ExtensionIdProvider {
      * connection isn't currently ready to send any data (because another WriteCommand
      * is still pending).
      */
-    val empty: Write = Write(ByteString.empty, NoAck)
+    val empty: Write = Write(Unpooled.EMPTY_BUFFER, NoAck)
 
     /**
      * Create a new unacknowledged Write command with the given data.
      */
-    def apply(data: ByteString): Write =
-      if (data.isEmpty) empty else Write(data, NoAck)
+    def apply(data: ByteBuf): Write =
+      Write(data, NoAck)
   }
 
   /**
@@ -432,7 +433,7 @@ object Tcp extends ExtensionId[TcpExt] with ExtensionIdProvider {
    * Whenever data are read from a socket they will be transferred within this
    * class to the handler actor which was designated in the [[Register]] message.
    */
-  final case class Received(data: ByteString) extends Event
+  final case class Received(data: ByteBuf) extends Event
 
   /**
    * The connection actor sends this message either to the sender of a [[Connect]]
@@ -742,7 +743,7 @@ object TcpMessage {
    *
    * @param keepOpenOnPeerClosed If this is set to true then the connection
    *                is not automatically closed when the peer closes its half,
-   *                requiring an explicit `Tcp.ConnectionClosed from our side when finished.
+   *                requiring an explicit `Tcp.ConnectionClosed` from our side when finished.
    *
    * @param useResumeWriting If this is set to true then the connection actor
    *                will refuse all further writes after issuing a [[Tcp.CommandFailed]]
@@ -811,11 +812,11 @@ object TcpMessage {
    * or have been sent!</b> Unfortunately there is no way to determine whether
    * a particular write has been sent by the O/S.
    */
-  def write(data: ByteString, ack: Event): Command = Write(data, ack)
+  //  def write(data: ByteString, ack: Event): Command = Write(data, ack)
   /**
    * The same as `write(data, noAck())`.
    */
-  def write(data: ByteString): Command = Write(data)
+  //  def write(data: ByteString): Command = Write(data)
 
   /**
    * Write `count` bytes starting at `position` from file at `filePath` to the connection.
