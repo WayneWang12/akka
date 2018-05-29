@@ -17,6 +17,7 @@ import akka.io.Inet.SocketOption
 import akka.io.SelectionHandler._
 import akka.io.Tcp._
 import akka.util.ByteString
+import io.netty.buffer.{ ByteBuf, Unpooled }
 
 import scala.annotation.tailrec
 import scala.collection.immutable
@@ -239,7 +240,7 @@ private[io] abstract class TcpConnection(val tcp: TcpExt, val channel: SocketCha
           buffer.flip()
 
           if (TraceLogging) log.debug("Read [{}] bytes.", readBytes)
-          if (readBytes > 0) info.handler ! Received(ByteString(buffer))
+          if (readBytes > 0) info.handler ! Received(Unpooled.wrappedBuffer(buffer))
 
           readBytes match {
             case `maxBufferSpace` ⇒ if (pullMode) MoreDataWaiting else innerRead(buffer, remainingLimit - maxBufferSpace)
@@ -377,11 +378,11 @@ private[io] abstract class TcpConnection(val tcp: TcpExt, val channel: SocketCha
   def PendingWrite(commander: ActorRef, write: WriteCommand): PendingWrite = {
     @tailrec def create(head: WriteCommand, tail: WriteCommand = Write.empty): PendingWrite =
       head match {
-        case Write.empty                         ⇒ if (tail eq Write.empty) EmptyPendingWrite else create(tail)
-        case Write(data, ack) if data.nonEmpty   ⇒ PendingBufferWrite(commander, data, ack, tail)
-        case WriteFile(path, offset, count, ack) ⇒ PendingWriteFile(commander, Paths.get(path), offset, count, ack, tail)
-        case WritePath(path, offset, count, ack) ⇒ PendingWriteFile(commander, path, offset, count, ack, tail)
-        case CompoundWrite(h, t)                 ⇒ create(h, t)
+        case Write.empty                           ⇒ if (tail eq Write.empty) EmptyPendingWrite else create(tail)
+        case Write(data, ack) if data.isReadable() ⇒ PendingBufferWrite(commander, data, ack, tail)
+        case WriteFile(path, offset, count, ack)   ⇒ PendingWriteFile(commander, Paths.get(path), offset, count, ack, tail)
+        case WritePath(path, offset, count, ack)   ⇒ PendingWriteFile(commander, path, offset, count, ack, tail)
+        case CompoundWrite(h, t)                   ⇒ create(h, t)
         case x @ Write(_, ack) ⇒ // empty write with either an ACK or a non-standard NoACK
           if (x.wantsAck) commander ! ack
           create(tail)
@@ -389,41 +390,32 @@ private[io] abstract class TcpConnection(val tcp: TcpExt, val channel: SocketCha
     create(write)
   }
 
-  def PendingBufferWrite(commander: ActorRef, data: ByteString, ack: Event, tail: WriteCommand): PendingBufferWrite = {
-    val buffer = bufferPool.acquire()
+  def PendingBufferWrite(commander: ActorRef, data: ByteBuf, ack: Event, tail: WriteCommand): PendingBufferWrite = {
     try {
-      val copied = data.copyToBuffer(buffer)
-      buffer.flip()
-      new PendingBufferWrite(commander, data.drop(copied), ack, buffer, tail)
+      new PendingBufferWrite(commander, ack, data, tail)
     } catch {
       case NonFatal(e) ⇒
-        bufferPool.release(buffer)
         throw e
     }
   }
 
   class PendingBufferWrite(
     val commander: ActorRef,
-    remainingData: ByteString,
     ack:           Any,
-    buffer:        ByteBuffer,
+    buffer:        ByteBuf,
     tail:          WriteCommand) extends PendingWrite {
 
     def doWrite(info: ConnectionInfo): PendingWrite = {
-      @tailrec def writeToChannel(data: ByteString): PendingWrite = {
-        val writtenBytes = channel.write(buffer) // at first we try to drain the remaining bytes from the buffer
+      @tailrec def writeToChannel(data: ByteBuf): PendingWrite = {
+        val b = buffer.nioBuffer()
+        val writtenBytes = channel.write(b) // at first we try to drain the remaining bytes from the buffer
         if (TraceLogging) log.debug("Wrote [{}] bytes to channel", writtenBytes)
-        if (buffer.hasRemaining) {
+        if (b.hasRemaining) {
           // we weren't able to write all bytes from the buffer, so we need to try again later
-          if (data eq remainingData) this
-          else new PendingBufferWrite(commander, data, ack, buffer, tail) // copy with updated remainingData
+          new PendingBufferWrite(commander, ack, data, tail) // copy with updated remainingData
 
-        } else if (data.nonEmpty) {
-          buffer.clear()
-          val copied = data.copyToBuffer(buffer)
-          buffer.flip()
-          writeToChannel(data drop copied)
-
+        } else if (data.nioBuffer().hasRemaining) {
+          writeToChannel(data)
         } else {
           if (!ack.isInstanceOf[NoAck]) commander ! ack
           release()
@@ -431,13 +423,13 @@ private[io] abstract class TcpConnection(val tcp: TcpExt, val channel: SocketCha
         }
       }
       try {
-        val next = writeToChannel(remainingData)
+        val next = writeToChannel(buffer)
         if (next ne EmptyPendingWrite) info.registration.enableInterest(OP_WRITE)
         next
       } catch { case e: IOException ⇒ handleError(info.handler, e); this }
     }
 
-    def release(): Unit = bufferPool.release(buffer)
+    def release(): Unit = bufferPool.release(buffer.nioBuffer())
   }
 
   def PendingWriteFile(commander: ActorRef, filePath: Path, offset: Long, count: Long, ack: Event,

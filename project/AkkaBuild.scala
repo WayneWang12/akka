@@ -24,7 +24,6 @@ object AkkaBuild {
     version := (version in ThisBuild).value)
 
   lazy val rootSettings = Release.settings ++
-    UnidocRoot.akkaSettings ++
     Formatting.formatSettings ++
     Protobuf.settings ++ Seq(
       parallelExecution in GlobalScope := System.getProperty("akka.parallelExecution", parallelExecutionByDefault.toString).toBoolean,

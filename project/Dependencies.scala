@@ -132,7 +132,10 @@ object Dependencies {
   // TODO check if `l ++=` everywhere expensive?
   val l = libraryDependencies
 
-  val actor = l ++= Seq(config, java8Compat.value)
+  val actor = l ++= Seq(config,
+    java8Compat.value,
+    "io.netty" % "netty-all" % "4.1.25.Final"
+  )
 
   val testkit = l ++= Seq(Test.junit, Test.scalatest.value) ++ Test.metricsAll
 
